@@ -1,1 +1,248 @@
 
+
+
+
+
+name: Deploy FastAPI to AWS ECR & ECS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install Dependencies & Run Tests
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pytest
+
+  deploy-aws:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init & Apply
+        run: |
+          cd terf/environment/aws
+          terraform init
+          terraform apply -auto-approve
+
+
+
+
+
+
+
+
+
+
+# name: Deploy FastAPI to AWS ECR & ECS
+
+# # ------------------------------------------------------
+# #  Triggering conditions: Add paths filtering to avoid 
+# #  accidentally triggering AWS # when modifying GCP. 
+# # ------------------------------------------------------
+# on:
+#   push:
+#     branches: [ main ]
+#     paths:
+#       - 'app/**'
+#       - 'terf/enviroment/aws/**'
+#       - '.github/workflows/deploy-aws.yml'
+#       - 'Dockerfile'
+#       - 'requirements.txt'
+#   pull_request:
+#     branches: [ main ]
+#     paths:
+#       - 'app/**'
+#       - 'terf/enviroment/aws/**'
+#       - '.github/workflows/deploy-aws.yml'
+#       - 'Dockerfile'
+#       - 'requirements.txt'
+#   workflow_dispatch: # supports manual triggering
+
+# env:
+#   AWS_REGION: ap-northeast-1
+#   ECR_REPOSITORY: my-app-repo
+
+# jobs:
+#   # ----------------------------------------------------
+#   # Phase 1. General test and AI failure diagnosis
+#   # ----------------------------------------------------
+#   test:
+#     runs-on: ubuntu-latest
+#     strategy:
+#       matrix:
+#         python-version: ["3.11", "3.12"]
+#     steps:
+#       - name: Checkout source code
+#         uses: actions/checkout@v3
+
+#       - name: Set up Python
+#         uses: actions/setup-python@v5
+#         with:
+#           python-version: ${{ matrix.python-version }}
+
+#       - name: Install dependencies
+#         run: |
+#           python -m pip install --upgrade pip
+#           pip install -r requirements.txt
+
+#       - name: Run tests
+#         run: |
+#           pytest --cov=. --cov-report=term-missing --cov-fail-under=80 | tee pytest.log
+
+#       # 🤖 AI Failure diagnosis: Only triggered when the test fails!
+#       - name: AI Diagnosis on Failure
+#         if: failure()
+#         env:
+#           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+#         run: |
+#           python -c "
+#           import os, requests
+
+#           api_key = os.environ.get('OPENAI_API_KEY')
+#           if not api_key:
+#               print('Error: Lack of OPENAI_API_KEY, Cannot be repaired.')
+#               exit(0)
+
+#           try:
+#               with open('pytest.log', 'r') as f:
+#                   log_content = f.read()
+#           except Exception as e:
+#               log_content = f'Cannot read log file: {e}'
+
+#           prompt = (f'Please analyze the following pytest test failure log in English. Provide a concise '
+#                     f'root-cause diagnosis and step-by-step fix recommendations:\n\n{log_content}')
+
+#           headers = {
+#               'Authorization': f'Bearer {api_key}',
+#               'Content-Type': 'application/json'
+#           }
+
+#           data = {
+#               'model': 'gpt-4o-mini',
+#               'messages': [{'role': 'user', 'content': prompt}]
+#           }
+
+#           try:
+#               res = requests.post('https://api.openai.com/v1/chat/completions', json=data, headers=headers, timeout=30)
+#               if res.status_code == 200:
+#                   analysis = res.json()['choices'][0]['message']['content']
+#                   print('\n----------------------------------------')
+#                   print('           🤖 AI Error Diagnosis Report   ')
+#                   print('----------------------------------------\n')
+#                   print(analysis)
+#               else:
+#                   print(f'AI Analysis Failed: {res.status_code} - {res.text}')
+#           except Exception as e:
+#               print(f'AI Request Exception: {e}')
+#           "
+
+#   # ----------------------------------------------------
+#   # Phase 2. Pull Request AI Code Review
+#   # ----------------------------------------------------
+#   ai-code-review:
+#     name: AI Code Review
+#     runs-on: ubuntu-latest
+#     if: github.event_name == 'pull_request'
+
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v3
+#         with:
+#           fetch-depth: 0
+
+#       - name: CodeRabbit AI PR Review
+#         uses: coderabbitai/coderabbit-action@v1
+#         with:
+#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+#   # ----------------------------------------------------
+#   # Phase 3. Docker Hub Registry Push
+#   # ----------------------------------------------------
+#   docker-build-push:
+#     name: Build and Push Docker Image
+#     runs-on: ubuntu-latest
+#     needs: test
+#     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+#     steps:
+#       - name: Checkout source code
+#         uses: actions/checkout@v3
+
+#       - name: Login to Docker Hub
+#         uses: docker/login-action@v3
+#         with:
+#           username: ${{ secrets.DOCKERHUB_USERNAME }}
+#           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+#       - name: Build and Push Docker image
+#         run: |
+#           docker build -t alextwtpyeh/inventory-db-aws-terraform-k8s:v4.0.0 .
+#           docker tag alextwtpyeh/inventory-db-aws-terraform-k8s:v4.0.0 alextwtpyeh/inventory-db-aws-terraform-k8s:latest
+#           docker push alextwtpyeh/inventory-db-aws-terraform-k8s:v4.0.0
+#           docker push alextwtpyeh/inventory-db-aws-terraform-k8s:latest       
+
+#   # ----------------------------------------------------
+#   # Phase 4. Build and Push to AWS ECR & Deploy to ECS
+#   # ----------------------------------------------------
+#   build-and-push-aws:
+#     name: Build and Push to Amazon ECR
+#     runs-on: ubuntu-latest
+#     needs: test
+#     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+#     steps:
+#       - name: Checkout source code
+#         uses: actions/checkout@v4
+
+#       - name: Configure AWS credentials
+#         uses: aws-actions/configure-aws-credentials@v3
+#         with:
+#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           aws-region: ${{ env.AWS_REGION }}
+
+#       - name: Login to Amazon ECR
+#         id: login-ecr
+#         uses: aws-actions/amazon-ecr-login@v2
+
+#       - name: Build, tag, and push image to Amazon ECR
+#         env:
+#           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+#           IMAGE_TAG: latest
+#         run: |
+#           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+#           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+#       - name: Deploy to Amazon ECS
+#         run: |
+#           aws ecs update-service \
+#             --cluster "my-app-cluster" \
+#             --service "my-ecs-service" \
+#             --force-new-deployment \
+#             --region ${{ env.AWS_REGION }}
