@@ -5,4 +5,5 @@ omit =
     app/*
     run_gui.py
     run_api.py
-    tests/*
+    logger.py
+    tests/*    
