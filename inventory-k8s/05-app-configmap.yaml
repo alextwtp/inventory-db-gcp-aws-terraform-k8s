@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: inventory
+data:
+  APP_ENV: "production"
+  DB_HOST: "mysql-service"   # The Service name created corresponding to 04-db-deployment.yaml
+  DB_PORT: "3306"

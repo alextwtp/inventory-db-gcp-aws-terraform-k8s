@@ -1,0 +1,42 @@
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Excel data files
+*.xlsx
+*.xls
+!data/sample_inventory.xlsx
+
+# Database / local volumes
+mysql_data/
+*.db
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Virtual environment
+.venv/
+venv/
+
+# Windows WSL metadata
+*:Zone.Identifier
+
+# Temporary files
+.tmp
+*.tar.gz
+*.tar.gz

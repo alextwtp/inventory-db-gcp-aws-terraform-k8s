@@ -1,0 +1,179 @@
+name: Deploy FastAPI to GCP Cloud Run & Docker Hub
+
+# ----------------------------------------------------
+# 觸發條件：只有當 GCP 相關目錄或 App 變動時才觸發
+# ----------------------------------------------------
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'app/**'
+      - 'terf/environment/gcp/**'
+      - '.github/workflows/deploy-gcp.yml'
+      - 'Dockerfile'
+      - 'requirements.txt'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'app/**'
+      - 'terf/environment/gcp/**'
+      - '.github/workflows/deploy-gcp.yml'
+      - 'Dockerfile'
+      - 'requirements.txt'
+  workflow_dispatch: # # supports manual triggering
+
+env:
+  GCP_REGION: asia-east1                    # 台灣機房 (對標 AWS ap-northeast-1)
+  GAR_REPOSITORY: my-app-repo               # GCP Artifact Registry 儲存庫名稱
+  SERVICE_NAME: my-fastapi-service          # Cloud Run 服務名稱
+
+jobs:
+  # ----------------------------------------------------
+  # Phase 1. General test and AI failure diagnosis 
+  # ----------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          pytest --cov=. --cov-report=term-missing --cov-fail-under=80 | tee pytest.log
+
+      # 🤖 AI Failure diagnosis: Only triggered when the test fails!
+      - name: AI Diagnosis on Failure
+        if: failure()
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -c "
+          import os, requests
+
+          api_key = os.environ.get('OPENAI_API_KEY')
+          if not api_key:
+              print('Error: Lack of OPENAI_API_KEY, Cannot be repaired.')
+              exit(0)
+
+          try:
+              with open('pytest.log', 'r') as f:
+                  log_content = f.read()
+          except Exception as e:
+              log_content = f'Cannot read log file: {e}'
+
+          prompt = (f'Please analyze the following pytest test failure log in English. Provide a concise '
+                    f'root-cause diagnosis and step-by-step fix recommendations:\n\n{log_content}')
+
+          headers = {
+              'Authorization': f'Bearer {api_key}',
+              'Content-Type': 'application/json'
+          }
+
+          data = {
+              'model': 'gpt-4o-mini',
+              'messages': [{'role': 'user', 'content': prompt}]
+          }
+
+          try:
+              res = requests.post('https://api.openai.com/v1/chat/completions', json=data, headers=headers, timeout=30)
+              if res.status_code == 200:
+                  analysis = res.json()['choices'][0]['message']['content']
+                  print('\n----------------------------------------')
+                  print('           🤖 AI Error Diagnosis Report   ')
+                  print('----------------------------------------\n')
+                  print(analysis)
+              else:
+                  print(f'AI Analysis Failed: {res.status_code} - {res.text}')
+          except Exception as e:
+              print(f'AI Request Exception: {e}')
+          "
+
+  # ----------------------------------------------------
+  # Phase 2. Docker Hub Registry Push
+  # ----------------------------------------------------
+  docker-build-push:
+    name: Build and Push Docker Image to Docker Hub
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push Docker image
+        run: |
+          docker build -t alextwtpyeh/inventory-db-gcp-terraform-k8s:v4.0.0 .
+          docker tag alextwtpyeh/inventory-db-gcp-terraform-k8s:v4.0.0 alextwtpyeh/inventory-db-gcp-terraform-k8s:latest
+          docker push alextwtpyeh/inventory-db-gcp-terraform-k8s:v4.0.0
+          docker push alextwtpyeh/inventory-db-gcp-terraform-k8s:latest
+
+  # ----------------------------------------------------
+  # Phase 3. Build and Push to GCP Artifact Registry & Deploy to Cloud Run
+  # ----------------------------------------------------
+  build-and-push-gcp:
+    name: Build & Deploy to GCP Cloud Run
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v3
+
+      # 1. 登入 GCP
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # 2. 設定 gcloud CLI 工具
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # 3. 設定 Docker 認證登入 GCP Artifact Registry
+      - name: Authorize Docker for GCP
+        run: |
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      # 4. Build, Tag & Push Docker Image 至 GAR
+      - name: Build and Push Docker Image
+        env:
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          IMAGE_TAG: latest
+        run: |
+          REGISTRY_URL="${{ env.GCP_REGION }}-docker.pkg.dev/${GCP_PROJECT}/${{ env.GAR_REPOSITORY }}/my-app:${IMAGE_TAG}"
+          docker build -t $REGISTRY_URL .
+          docker push $REGISTRY_URL
+
+      # 5. 部署至 GCP Cloud Run
+      - name: Deploy to Cloud Run
+        env:
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          IMAGE_TAG: latest
+        run: |
+          REGISTRY_URL="${{ env.GCP_REGION }}-docker.pkg.dev/${GCP_PROJECT}/${{ env.GAR_REPOSITORY }}/my-app:${IMAGE_TAG}"
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image $REGISTRY_URL \
+            --region ${{ env.GCP_REGION }} \
+            --platform managed \
+            --allow-unauthenticated

@@ -1,0 +1,8 @@
+[run]
+omit =
+    ui/*
+    api/*
+    app/*
+    run_gui.py
+    run_api.py
+    tests/*

@@ -1,0 +1,27 @@
+# Use a lightweight Python base image
+FROM python:3.11-slim
+
+# Set the working directory
+WORKDIR /app
+
+# Set environment variables: prevent Python from generating .pyc files and ensure log output is immediate
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Install system dependencies (if any compilation is needed, this is where to extend, for now keep it clean)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /lib/apt/lists/*
+
+# Copy the requirements file and install dependencies (utilizing Docker Layer Cache to speed up future builds)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the application code
+COPY . .
+
+# Expose the default FastAPI port
+EXPOSE 8000
+
+# Startup command
+CMD ["uvicorn", "inventory-k8s.main:app", "--host", "0.0.0.0", "--port", "8000"]

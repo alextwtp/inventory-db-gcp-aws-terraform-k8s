@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+sqlalchemy
+pymysql
+python-dotenv
+pandas
+openpyxl
+requests
+httpx
+pytest
+pytest-cov
+cryptography
+boto3
